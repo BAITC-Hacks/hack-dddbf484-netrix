@@ -1,0 +1,17 @@
+:root {
+  --color-page: #F4FBF9;
+  --color-green-light: #DDF5E8;
+  --color-blue-light: #E1EEFF;
+  --color-surface: rgba(255, 255, 255, 0.88);
+  --color-primary: #176B54;
+  --color-text: #183B42;
+  --color-text-muted: #526B73;
+  --color-white: #fff;
+  --color-border: rgba(55, 115, 111, 0.16);
+  --color-focus: #176b54;
+
+  --radius-panel: 20px;
+  --radius-control: 11px;
+  --content-width: 1160px;
+  --shadow-panel: 0 14px 40px rgba(24, 59, 66, 0.055);
+}
