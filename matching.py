@@ -3,18 +3,56 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import date
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from prepare_profiles import Profile
 
 
-FIRST_DATE = date(2026, 9, 23)
-LAST_DATE = date(2026, 12, 31)
+FIRST_DATE = date.fromisoformat(os.getenv("MATCH_FIRST_DATE", "2026-09-23"))
+LAST_DATE = date.fromisoformat(os.getenv("MATCH_LAST_DATE", "2026-12-31"))
+if FIRST_DATE > LAST_DATE:
+    raise ValueError("MATCH_FIRST_DATE must be on or before MATCH_LAST_DATE")
 CATALOG_PATH = Path(__file__).with_name("profiles.json")
+
+
+class CatalogProfile(BaseModel):
+    """Validated JSON representation of a catalog profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    anon_name: str = Field(min_length=1)
+    categories: list[str] = Field(min_length=1)
+    city: str = Field(min_length=1)
+    city_imputed: bool
+    synthetic: bool
+    price_from_kzt: int = Field(ge=0)
+    price_imputed: bool
+    event_formats: list[str] = Field(min_length=1)
+    languages: list[str]
+    max_hours: int | None = Field(default=None, ge=0)
+    busy_dates: list[date]
+    description: str
+
+    @field_validator("id", "anon_name", "city", "description")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Field cannot be blank")
+        return value
+
+    @field_validator("categories", "event_formats", "languages")
+    @classmethod
+    def validate_list_items(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() for item in values):
+            raise ValueError("List values cannot be blank")
+        return [item.strip() for item in values]
 
 # These stems affect ordering only. Eligibility comes from structured profile fields.
 FORMAT_TERMS: dict[str, tuple[str, ...]] = {
@@ -88,11 +126,15 @@ def load_catalog(path: Path = CATALOG_PATH) -> list[Profile]:
         raise ValueError("profiles.json must contain a list")
     profiles: list[Profile] = []
     seen_ids: set[str] = set()
-    for row in raw:
-        if row["id"] in seen_ids:
-            raise ValueError(f"Duplicate profile id: {row['id']}")
-        seen_ids.add(row["id"])
-        profiles.append({**row, "busy_dates": [date.fromisoformat(d) for d in row["busy_dates"]]})
+    for index, row in enumerate(raw, start=1):
+        try:
+            validated = CatalogProfile.model_validate(row)
+        except ValidationError as error:
+            raise ValueError(f"Invalid catalog profile at index {index}: {error}") from error
+        if validated.id in seen_ids:
+            raise ValueError(f"Duplicate profile id: {validated.id}")
+        seen_ids.add(validated.id)
+        profiles.append(validated.model_dump())
     return profiles
 
 
@@ -124,7 +166,12 @@ def description_evidence(description: str, event_format: str) -> str:
     best = best.strip(" .;:•")
     if len(best) > 175:
         best = best[:175].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"
-    return best
+    best = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[контакт удалён]", best)
+
+    def redact_phone(match: re.Match[str]) -> str:
+        return "[контакт удалён]" if sum(ch.isdigit() for ch in match.group()) >= 10 else match.group()
+
+    return re.sub(r"(?<!\w)\+?\d[\d\s().-]{6,}\d(?!\w)", redact_phone, best)
 
 
 def count_word(n: int, one: str, few: str, many: str) -> str:
